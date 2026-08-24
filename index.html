@@ -503,62 +503,104 @@
     setTimeout(loop, 200);
   }
 
-  function loadZXing(){
+  function loadScript(src){
     return new Promise(function(res){
-      if(window.ZXing) return res(true);
       var s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.19.1/umd/index.min.js";
+      s.src = src; s.async = true;
       s.onload = function(){ res(!!window.ZXing); };
       s.onerror = function(){ res(false); };
       document.head.appendChild(s);
     });
   }
+  function loadZXing(){
+    if(window.ZXing) return Promise.resolve(true);
+    var urls = [
+      "https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.19.1/umd/index.min.js",
+      "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js",
+      "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"
+    ];
+    return urls.reduce(function(chain, u){
+      return chain.then(function(ok){ return ok ? true : loadScript(u); });
+    }, Promise.resolve(false));
+  }
 
-  function camFail(msg){
+  function camFail(msg, detail){
     $("camerror").hidden = false;
-    if(msg) $("camerrmsg").textContent = msg;
+    if(msg) $("camerrmsg").textContent = msg + (detail ? "  [" + detail + "]" : "");
+  }
+
+  function waitReady(video){
+    return new Promise(function(res){
+      var tries = 0;
+      (function check(){
+        if(video.readyState >= 2 || tries > 40) return res();
+        tries++; setTimeout(check, 100);
+      })();
+    });
+  }
+
+  // Avvio del rilevatore: separato dalla fotocamera, così un suo errore
+  // non viene scambiato per un permesso negato.
+  function startDetection(){
+    $("camerror").hidden = true;
+    if("BarcodeDetector" in window){
+      try{
+        detector = new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a","upc_e","code_128","itf"]});
+      }catch(e){
+        try{ detector = new window.BarcodeDetector(); }catch(e2){ detector = null; }
+      }
+    }
+    if(detector){ scanning = true; loop(); return Promise.resolve(); }
+
+    return loadZXing().then(function(ok){
+      if(!ok){
+        camFail("Lettore di codici a barre non caricato. Verifica la connessione e tocca Riprova, oppure digita il codice.");
+        return;
+      }
+      if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+      zxReader = new window.ZXing.BrowserMultiFormatReader();
+      zxReader.decodeFromVideoDevice(null, "video", function(result){
+        if(result) accept(result.getText());
+      });
+      scanning = true;
+    });
   }
 
   function startCamera(){
     $("camerror").hidden = true;
     if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      camFail("Questo contesto non espone la fotocamera. Registra i volumi digitando il codice, oppure apri il file in un browser.");
+      camFail("Questo contesto non espone la fotocamera. Apri la pagina in https, oppure digita il codice.");
       return;
     }
-    var supported = ("BarcodeDetector" in window);
-    var constraints = {video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}, audio:false};
+    var video = $("video");
+    var pref = {video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}, audio:false};
 
-    navigator.mediaDevices.getUserMedia(constraints).then(function(s){
-      stream = s;
-      var video = $("video");
-      video.srcObject = s;
-      return video.play();
-    }).then(function(){
-      if(supported){
-        try{
-          detector = new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a","upc_e","code_128","itf"]});
-        }catch(e){ detector = new window.BarcodeDetector(); }
-        scanning = true;
-        loop();
-      }else{
-        loadZXing().then(function(ok){
-          if(!ok){
-            camFail("Il rilevatore di codici a barre non è disponibile su questo browser. Usa Chrome su Android, oppure digita il codice.");
-            return;
-          }
-          if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
-          zxReader = new window.ZXing.BrowserMultiFormatReader();
-          zxReader.decodeFromVideoDevice(null, "video", function(result){
-            if(result) accept(result.getText());
-          });
-          scanning = true;
-        });
+    navigator.mediaDevices.getUserMedia(pref).catch(function(e){
+      var n = e && e.name;
+      if(n === "OverconstrainedError" || n === "NotFoundError" || n === "NotReadableError"){
+        return navigator.mediaDevices.getUserMedia({video:true, audio:false});
       }
+      throw e;
+    }).then(function(s){
+      stream = s;
+      video.srcObject = s;
+      var p = video.play();
+      // play() può rifiutare per le regole di autoplay: non è un problema di permessi
+      if(p && p.catch) p.catch(function(){});
+      return waitReady(video).then(startDetection);
     }).catch(function(err){
-      var m = err && err.name === "NotAllowedError"
-        ? "Permesso fotocamera negato. Concedilo dalle impostazioni, oppure digita il codice."
-        : "Fotocamera non raggiungibile da qui. Puoi registrare i volumi digitando il codice.";
-      camFail(m);
+      var n = (err && err.name) ? err.name : "Errore";
+      var m;
+      if(n === "NotAllowedError") m = "Permesso fotocamera negato per questo sito. Tocca il lucchetto accanto all'indirizzo → Autorizzazioni → Fotocamera.";
+      else if(n === "NotFoundError") m = "Nessuna fotocamera rilevata sul dispositivo.";
+      else if(n === "NotReadableError") m = "La fotocamera è occupata da un'altra app. Chiudila e tocca Riprova.";
+      else m = "Avvio della fotocamera non riuscito. Tocca Riprova, oppure digita il codice.";
+      camFail(m, n);
+    });
+
+    // se l'autoplay è stato bloccato, un tocco sull'inquadratura fa partire il video
+    $("camwrap").addEventListener("click", function(){
+      if(video.paused && video.srcObject){ var q = video.play(); if(q && q.catch) q.catch(function(){}); }
     });
   }
 
