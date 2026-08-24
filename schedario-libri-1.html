@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Schedario — scansione volumi</title>
+<style>
+  :root{
+    --ink:#0C1A21;
+    --ink2:#142B36;
+    --line:#27444F;
+    --cream:#EDE4D2;
+    --muted:#8CA3AD;
+    --ottimo:#17876B;
+    --buono:#7C9A3D;
+    --accettabile:#C4881B;
+    --pessimo:#B03A2A;
+    --label: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--ink); color:var(--cream);
+    font-family:var(--label);
+    overscroll-behavior:none;
+  }
+  #app{
+    height:100dvh; display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+
+  /* ---------- intestazione ---------- */
+  .top{
+    display:flex; align-items:baseline; justify-content:space-between;
+    padding:14px 16px 12px; border-bottom:1px solid var(--line);
+  }
+  .wordmark{
+    font-size:12px; letter-spacing:.34em; text-transform:uppercase; font-weight:600;
+  }
+  .tally{font-family:var(--mono); font-size:12px; color:var(--muted); letter-spacing:.04em}
+
+  /* ---------- schermata iniziale ---------- */
+  .screen{flex:1; display:flex; flex-direction:column; min-height:0}
+  .screen[hidden]{display:none}
+  .intro{justify-content:center; align-items:center; text-align:center; padding:24px; gap:8px}
+  .intro h1{
+    font-size:30px; line-height:1.15; margin:0 0 6px; font-weight:600; letter-spacing:-.01em;
+    max-width:15ch;
+  }
+  .intro p{color:var(--muted); font-size:15px; line-height:1.5; margin:0 0 26px; max-width:32ch}
+
+  /* ---------- fotocamera ---------- */
+  .camwrap{position:relative; flex:1; min-height:0; background:#08131A; overflow:hidden}
+  video{width:100%; height:100%; object-fit:cover; display:block}
+  .reticle{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    pointer-events:none;
+  }
+  .brackets{
+    width:min(78vw,340px); aspect-ratio:5/3; position:relative;
+    transition:transform .18s ease;
+  }
+  .brackets span{position:absolute; width:26px; height:26px; border:2px solid var(--cream); opacity:.85}
+  .brackets span:nth-child(1){top:0;left:0;border-right:0;border-bottom:0}
+  .brackets span:nth-child(2){top:0;right:0;border-left:0;border-bottom:0}
+  .brackets span:nth-child(3){bottom:0;left:0;border-right:0;border-top:0}
+  .brackets span:nth-child(4){bottom:0;right:0;border-left:0;border-top:0}
+  .locked .brackets{transform:scale(.9)}
+  .locked .brackets span{border-color:var(--ottimo); opacity:1}
+  .hint{
+    position:absolute; left:0; right:0; bottom:14px; text-align:center;
+    font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:var(--cream);
+    text-shadow:0 1px 6px rgba(0,0,0,.8);
+  }
+  .camerror{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:14px; padding:28px; text-align:center; background:var(--ink);
+  }
+  .camerror p{color:var(--muted); font-size:14px; line-height:1.5; margin:0; max-width:34ch}
+
+  /* ---------- cartellino ---------- */
+  .slipzone{padding:12px 16px 0; min-height:74px}
+  .slip{
+    display:flex; align-items:center; gap:12px;
+    background:var(--cream); color:var(--ink); border-radius:2px;
+    padding:11px 14px 11px 10px; position:relative; overflow:hidden;
+    animation:drop .26s cubic-bezier(.2,.8,.3,1);
+  }
+  @keyframes drop{from{transform:translateY(-10px); opacity:0} to{transform:none; opacity:1}}
+  .slip .tab{position:absolute; left:0; top:0; bottom:0; width:7px}
+  .slip .hole{
+    width:9px; height:9px; border-radius:50%; background:var(--ink); opacity:.22; flex:none; margin-left:6px;
+  }
+  .slip .code{font-family:var(--mono); font-size:15px; letter-spacing:.02em; flex:1; min-width:0}
+  .slip .state{
+    font-size:10px; letter-spacing:.18em; text-transform:uppercase; font-weight:700; white-space:nowrap;
+  }
+  .slip .time{font-family:var(--mono); font-size:11px; opacity:.5}
+
+  /* ---------- barra inferiore ---------- */
+  .bar{display:flex; gap:8px; padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  button{font-family:inherit; font-size:inherit; color:inherit; cursor:pointer; border:0; background:none}
+  .btn{
+    flex:1; padding:14px 10px; border:1px solid var(--line); border-radius:2px; background:var(--ink2);
+    font-size:11px; letter-spacing:.18em; text-transform:uppercase; font-weight:600;
+    transition:background .15s;
+  }
+  .btn:active{background:#1D3A47}
+  .btn.primary{background:var(--cream); color:var(--ink); border-color:var(--cream)}
+  .btn.wide{flex:none; width:100%; padding:17px; font-size:12px}
+  .btn:focus-visible, .cond:focus-visible{outline:2px solid var(--cream); outline-offset:2px}
+
+  /* ---------- pannello stato ---------- */
+  .sheet{
+    position:fixed; inset:0; background:rgba(8,19,26,.86); z-index:20;
+    display:flex; flex-direction:column; justify-content:flex-end;
+  }
+  .sheet[hidden]{display:none}
+  .sheetbody{
+    background:var(--ink); border-top:1px solid var(--line);
+    padding:20px 16px calc(16px + env(safe-area-inset-bottom));
+    animation:up .2s ease;
+  }
+  @keyframes up{from{transform:translateY(16px)} to{transform:none}}
+  .eyebrow{font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:var(--muted)}
+  .bigcode{font-family:var(--mono); font-size:26px; letter-spacing:.02em; margin:8px 0 2px; word-break:break-all}
+  .sub{font-size:13px; color:var(--muted); margin:0 0 18px}
+  .conds{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .cond{
+    padding:20px 12px; border-radius:2px; text-align:left; color:#fff;
+    font-size:13px; letter-spacing:.16em; text-transform:uppercase; font-weight:700;
+    display:flex; flex-direction:column; gap:6px;
+  }
+  .cond small{font-size:10px; letter-spacing:.04em; text-transform:none; font-weight:400; opacity:.82}
+  .cond:active{filter:brightness(1.15)}
+  .c-ottimo{background:var(--ottimo)} .c-buono{background:var(--buono)}
+  .c-accettabile{background:var(--accettabile)} .c-pessimo{background:var(--pessimo)}
+  .sheetfoot{display:flex; gap:8px; margin-top:12px}
+
+  /* ---------- schedario ---------- */
+  .listtop{padding:14px 16px 10px}
+  .meter{display:flex; height:5px; border-radius:2px; overflow:hidden; background:var(--ink2); margin-top:10px}
+  .meter i{display:block}
+  .legend{display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; font-size:11px; color:var(--muted); font-family:var(--mono)}
+  .legend b{display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px}
+  .rows{flex:1; overflow-y:auto; padding:4px 16px 16px; -webkit-overflow-scrolling:touch}
+  .row{
+    display:flex; align-items:center; gap:12px; width:100%; text-align:left;
+    padding:13px 0; border-bottom:1px solid var(--line);
+  }
+  .row .tag{width:7px; height:30px; flex:none; border-radius:1px}
+  .row .code{font-family:var(--mono); font-size:15px; flex:1; min-width:0}
+  .row .meta{text-align:right; line-height:1.35}
+  .row .meta .s{font-size:10px; letter-spacing:.16em; text-transform:uppercase; font-weight:700}
+  .row .meta .t{font-family:var(--mono); font-size:11px; color:var(--muted)}
+  .empty{padding:48px 16px; text-align:center; color:var(--muted); font-size:14px; line-height:1.6}
+
+  /* ---------- dialoghi ---------- */
+  .modal{position:fixed; inset:0; background:rgba(8,19,26,.9); z-index:30; display:flex; align-items:center; justify-content:center; padding:20px}
+  .modal[hidden]{display:none}
+  .card{background:var(--ink); border:1px solid var(--line); border-radius:2px; padding:18px; width:100%; max-width:420px}
+  .card h2{font-size:12px; letter-spacing:.24em; text-transform:uppercase; margin:0 0 14px; font-weight:600}
+  input[type=tel], textarea{
+    width:100%; background:var(--ink2); border:1px solid var(--line); color:var(--cream);
+    font-family:var(--mono); font-size:16px; padding:13px; border-radius:2px;
+  }
+  textarea{height:190px; font-size:12px; line-height:1.6; resize:none}
+  .toast{
+    position:fixed; left:50%; bottom:96px; transform:translateX(-50%);
+    background:var(--cream); color:var(--ink); padding:9px 16px; border-radius:2px; z-index:40;
+    font-size:12px; letter-spacing:.1em; text-transform:uppercase; font-weight:600;
+    animation:up .18s ease;
+  }
+  .toast[hidden]{display:none}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="top">
+    <div class="wordmark">Schedario</div>
+    <div class="tally" id="tally">0 volumi</div>
+  </div>
+
+  <!-- avvio -->
+  <section class="screen intro" id="introView">
+    <h1>Scansiona, valuta, avanti.</h1>
+    <p>Inquadra il codice a barre sul retro del volume e assegna lo stato di conservazione con un tocco.</p>
+    <button class="btn primary wide" id="startBtn">Avvia scansione</button>
+    <div class="bar" style="padding-left:0;padding-right:0;width:100%;max-width:420px">
+      <button class="btn" id="introManual">Digita codice</button>
+      <button class="btn" id="introList">Schedario</button>
+    </div>
+  </section>
+
+  <!-- scansione -->
+  <section class="screen" id="scanView" hidden>
+    <div class="camwrap" id="camwrap">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="reticle"><div class="brackets"><span></span><span></span><span></span><span></span></div></div>
+      <div class="hint" id="hint">Inquadra il codice a barre</div>
+      <div class="camerror" id="camerror" hidden>
+        <div class="eyebrow">Fotocamera non disponibile</div>
+        <p id="camerrmsg">Il permesso è stato negato o la fotocamera non è raggiungibile da qui. Puoi registrare i volumi digitando il codice.</p>
+        <button class="btn" id="retryCam" style="flex:none;padding:14px 26px">Riprova</button>
+      </div>
+    </div>
+    <div class="slipzone" id="slipzone"></div>
+    <div class="bar">
+      <button class="btn" id="scanManual">Digita codice</button>
+      <button class="btn" id="scanList">Schedario</button>
+    </div>
+  </section>
+
+  <!-- elenco -->
+  <section class="screen" id="listView" hidden>
+    <div class="listtop">
+      <div class="eyebrow">Volumi registrati</div>
+      <div class="meter" id="meter"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="rows" id="rows"></div>
+    <div class="bar">
+      <button class="btn primary" id="backScan">Scansiona</button>
+      <button class="btn" id="exportBtn">Esporta</button>
+    </div>
+  </section>
+</div>
+
+<!-- pannello stato -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheetbody">
+    <div class="eyebrow" id="sheetEyebrow">Nuovo volume</div>
+    <div class="bigcode" id="sheetCode">—</div>
+    <p class="sub" id="sheetSub">Stato di conservazione</p>
+    <div class="conds">
+      <button class="cond c-ottimo" data-c="Ottimo">Ottimo<small>come nuovo</small></button>
+      <button class="cond c-buono" data-c="Buono">Buono<small>segni d'uso lievi</small></button>
+      <button class="cond c-accettabile" data-c="Accettabile">Accettabile<small>usurato, integro</small></button>
+      <button class="cond c-pessimo" data-c="Pessimo">Pessimo<small>da sostituire</small></button>
+    </div>
+    <div class="sheetfoot">
+      <button class="btn" id="sheetCancel">Annulla</button>
+      <button class="btn" id="sheetDelete" hidden>Elimina</button>
+    </div>
+  </div>
+</div>
+
+<!-- inserimento manuale -->
+<div class="modal" id="manualModal" hidden>
+  <div class="card">
+    <h2>Codice ISBN / EAN</h2>
+    <input type="tel" id="manualInput" inputmode="numeric" placeholder="978…" autocomplete="off">
+    <div class="bar" style="padding:14px 0 0">
+      <button class="btn" id="manualCancel">Annulla</button>
+      <button class="btn primary" id="manualOk">Continua</button>
+    </div>
+  </div>
+</div>
+
+<!-- esportazione -->
+<div class="modal" id="exportModal" hidden>
+  <div class="card">
+    <h2>Esporta in CSV</h2>
+    <textarea id="csvArea" readonly></textarea>
+    <div class="bar" style="padding:14px 0 0">
+      <button class="btn" id="exportClose">Chiudi</button>
+      <button class="btn" id="csvDownload">Scarica</button>
+      <button class="btn primary" id="csvCopy">Copia</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function(){
+  "use strict";
+
+  var KEY = "libri:catalogo";
+  var COLORS = {Ottimo:"#17876B", Buono:"#7C9A3D", Accettabile:"#C4881B", Pessimo:"#B03A2A"};
+  var ORDER = ["Ottimo","Buono","Accettabile","Pessimo"];
+
+  var books = [];
+  var scanning = false, stream = null, detector = null, zxReader = null;
+  var candidate = null, candidateHits = 0, cooldown = {code:null, until:0};
+  var pending = null;   // {code, editing:bool}
+  var audio = null;
+
+  var $ = function(id){ return document.getElementById(id); };
+
+  /* ---------------- archivio ---------------- */
+  function hasStore(){ return typeof window !== "undefined" && window.storage && window.storage.get; }
+  function hasLocal(){
+    try{ window.localStorage.setItem("__t","1"); window.localStorage.removeItem("__t"); return true; }
+    catch(e){ return false; }
+  }
+
+  function load(){
+    if(hasStore()){
+      return window.storage.get(KEY).then(function(r){
+        books = r && r.value ? JSON.parse(r.value) : [];
+      }).catch(function(){ books = readLocal(); });
+    }
+    books = readLocal();
+    return Promise.resolve();
+  }
+  function readLocal(){
+    if(!hasLocal()) return [];
+    try{ return JSON.parse(window.localStorage.getItem(KEY) || "[]"); }catch(e){ return []; }
+  }
+  function persist(){
+    var payload = JSON.stringify(books);
+    if(hasLocal()){ try{ window.localStorage.setItem(KEY, payload); }catch(e){} }
+    if(hasStore()){
+      return window.storage.set(KEY, payload).catch(function(){
+        if(!hasLocal()) toast("Salvataggio non riuscito");
+      });
+    }
+    if(!hasLocal()) toast("Archivio non disponibile");
+    return Promise.resolve();
+  }
+
+  /* ---------------- utilità ---------------- */
+  function validEan13(c){
+    if(!/^\d{13}$/.test(c)) return false;
+    var s = 0;
+    for(var i=0;i<12;i++) s += (+c[i]) * (i%2 ? 3 : 1);
+    return (10 - (s % 10)) % 10 === +c[12];
+  }
+  function plausible(c){
+    if(!/^\d{8,13}$/.test(c)) return false;
+    if(c.length === 13) return validEan13(c);
+    return c.length === 8 || c.length === 12;
+  }
+  function find(code){
+    for(var i=0;i<books.length;i++) if(books[i].code === code) return books[i];
+    return null;
+  }
+  function hhmm(ts){
+    var d = new Date(ts), p = function(n){ return (n<10?"0":"")+n; };
+    return p(d.getHours())+":"+p(d.getMinutes());
+  }
+  function stamp(ts){
+    var d = new Date(ts), p = function(n){ return (n<10?"0":"")+n; };
+    return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes());
+  }
+  var toastTimer;
+  function toast(msg){
+    var t = $("toast");
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.hidden = true; }, 1600);
+  }
+  function beep(){
+    try{
+      if(!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+      var o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = 880; o.type = "sine";
+      g.gain.setValueAtTime(.0001, audio.currentTime);
+      g.gain.exponentialRampToValueAtTime(.16, audio.currentTime + .01);
+      g.gain.exponentialRampToValueAtTime(.0001, audio.currentTime + .13);
+      o.connect(g); g.connect(audio.destination);
+      o.start(); o.stop(audio.currentTime + .14);
+    }catch(e){}
+    if(navigator.vibrate) navigator.vibrate(28);
+  }
+
+  /* ---------------- viste ---------------- */
+  function show(which){
+    $("introView").hidden = which !== "intro";
+    $("scanView").hidden  = which !== "scan";
+    $("listView").hidden  = which !== "list";
+    if(which === "list") renderList();
+  }
+
+  function renderTally(){
+    $("tally").textContent = books.length + (books.length === 1 ? " volume" : " volumi");
+  }
+
+  function renderSlip(b){
+    var z = $("slipzone");
+    if(!b){ z.innerHTML = ""; return; }
+    z.innerHTML =
+      '<div class="slip">' +
+        '<span class="tab" style="background:'+COLORS[b.cond]+'"></span>' +
+        '<span class="hole"></span>' +
+        '<span class="code">'+b.code+'</span>' +
+        '<span class="state" style="color:'+COLORS[b.cond]+'">'+b.cond+'</span>' +
+        '<span class="time">'+hhmm(b.ts)+'</span>' +
+      '</div>';
+  }
+
+  function renderList(){
+    var counts = {}, i;
+    for(i=0;i<ORDER.length;i++) counts[ORDER[i]] = 0;
+    for(i=0;i<books.length;i++) if(counts[books[i].cond] !== undefined) counts[books[i].cond]++;
+
+    var meter = "", legend = "";
+    for(i=0;i<ORDER.length;i++){
+      var k = ORDER[i], pct = books.length ? (counts[k]/books.length*100) : 0;
+      if(pct) meter += '<i style="width:'+pct+'%;background:'+COLORS[k]+'"></i>';
+      legend += '<span><b style="background:'+COLORS[k]+'"></b>'+k.toLowerCase()+' '+counts[k]+'</span>';
+    }
+    $("meter").innerHTML = meter;
+    $("legend").innerHTML = legend;
+
+    var rows = $("rows");
+    if(!books.length){
+      rows.innerHTML = '<div class="empty">Nessun volume registrato.<br>Torna alla scansione e inquadra il primo codice.</div>';
+      return;
+    }
+    var sorted = books.slice().sort(function(a,b){ return b.ts - a.ts; });
+    var html = "";
+    for(i=0;i<sorted.length;i++){
+      var b = sorted[i];
+      html +=
+        '<button class="row" data-code="'+b.code+'">' +
+          '<span class="tag" style="background:'+COLORS[b.cond]+'"></span>' +
+          '<span class="code">'+b.code+'</span>' +
+          '<span class="meta">' +
+            '<span class="s" style="color:'+COLORS[b.cond]+'">'+b.cond+'</span><br>' +
+            '<span class="t">'+stamp(b.ts).slice(5)+'</span>' +
+          '</span>' +
+        '</button>';
+    }
+    rows.innerHTML = html;
+  }
+
+  /* ---------------- pannello stato ---------------- */
+  function openSheet(code, editing){
+    pending = {code:code, editing:!!editing};
+    var existing = find(code);
+    $("sheetCode").textContent = code;
+    $("sheetDelete").hidden = !existing;
+    if(existing){
+      $("sheetEyebrow").textContent = "Già in schedario";
+      $("sheetSub").textContent = "Registrato come " + existing.cond.toLowerCase() + " il " + stamp(existing.ts) + ". Tocca per aggiornare.";
+    }else{
+      $("sheetEyebrow").textContent = code.indexOf("978") === 0 || code.indexOf("979") === 0 ? "Nuovo volume · ISBN" : "Nuovo volume";
+      $("sheetSub").textContent = "Stato di conservazione";
+    }
+    $("sheet").hidden = false;
+  }
+  function closeSheet(){
+    $("sheet").hidden = true;
+    pending = null;
+    $("camwrap").classList.remove("locked");
+    $("hint").textContent = "Inquadra il codice a barre";
+    resume();
+  }
+  function assign(cond){
+    if(!pending) return;
+    var code = pending.code, existing = find(code);
+    if(existing){ existing.cond = cond; existing.ts = Date.now(); }
+    else { books.push({code:code, cond:cond, ts:Date.now()}); }
+    persist();
+    renderTally();
+    renderSlip(find(code));
+    cooldown = {code:code, until:Date.now() + 3000};
+    toast(existing ? "Aggiornato" : "Registrato");
+    if($("listView").hidden === false) renderList();
+    closeSheet();
+  }
+  function removeCurrent(){
+    if(!pending) return;
+    books = books.filter(function(b){ return b.code !== pending.code; });
+    persist(); renderTally(); renderList();
+    if($("slipzone").textContent.indexOf(pending.code) > -1) renderSlip(null);
+    toast("Eliminato");
+    closeSheet();
+  }
+
+  /* ---------------- scansione ---------------- */
+  function accept(raw){
+    if(!scanning) return;
+    var v = String(raw).replace(/\D/g, "");
+    if(!plausible(v)) return;
+    if(cooldown.code === v && Date.now() < cooldown.until) return;
+    if(v === candidate){ candidateHits++; } else { candidate = v; candidateHits = 1; }
+    if(candidateHits < 2) return;          // due letture identiche = lettura confermata
+    scanning = false; candidate = null; candidateHits = 0;
+    $("camwrap").classList.add("locked");
+    $("hint").textContent = "Codice acquisito";
+    beep();
+    openSheet(v, false);
+  }
+  function resume(){
+    candidate = null; candidateHits = 0;
+    if(stream || zxReader) scanning = true;
+  }
+
+  function loop(){
+    if(!detector) return;
+    var video = $("video");
+    if(scanning && video.readyState >= 2){
+      detector.detect(video).then(function(list){
+        if(list && list.length) accept(list[0].rawValue);
+      }).catch(function(){});
+    }
+    setTimeout(loop, 200);
+  }
+
+  function loadZXing(){
+    return new Promise(function(res){
+      if(window.ZXing) return res(true);
+      var s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/zxing-library/0.19.1/umd/index.min.js";
+      s.onload = function(){ res(!!window.ZXing); };
+      s.onerror = function(){ res(false); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function camFail(msg){
+    $("camerror").hidden = false;
+    if(msg) $("camerrmsg").textContent = msg;
+  }
+
+  function startCamera(){
+    $("camerror").hidden = true;
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      camFail("Questo contesto non espone la fotocamera. Registra i volumi digitando il codice, oppure apri il file in un browser.");
+      return;
+    }
+    var supported = ("BarcodeDetector" in window);
+    var constraints = {video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}, audio:false};
+
+    navigator.mediaDevices.getUserMedia(constraints).then(function(s){
+      stream = s;
+      var video = $("video");
+      video.srcObject = s;
+      return video.play();
+    }).then(function(){
+      if(supported){
+        try{
+          detector = new window.BarcodeDetector({formats:["ean_13","ean_8","upc_a","upc_e","code_128","itf"]});
+        }catch(e){ detector = new window.BarcodeDetector(); }
+        scanning = true;
+        loop();
+      }else{
+        loadZXing().then(function(ok){
+          if(!ok){
+            camFail("Il rilevatore di codici a barre non è disponibile su questo browser. Usa Chrome su Android, oppure digita il codice.");
+            return;
+          }
+          if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
+          zxReader = new window.ZXing.BrowserMultiFormatReader();
+          zxReader.decodeFromVideoDevice(null, "video", function(result){
+            if(result) accept(result.getText());
+          });
+          scanning = true;
+        });
+      }
+    }).catch(function(err){
+      var m = err && err.name === "NotAllowedError"
+        ? "Permesso fotocamera negato. Concedilo dalle impostazioni, oppure digita il codice."
+        : "Fotocamera non raggiungibile da qui. Puoi registrare i volumi digitando il codice.";
+      camFail(m);
+    });
+  }
+
+  /* ---------------- esportazione ---------------- */
+  function buildCsv(){
+    var out = "codice;stato;data_ora\n";
+    var sorted = books.slice().sort(function(a,b){ return a.ts - b.ts; });
+    for(var i=0;i<sorted.length;i++){
+      out += sorted[i].code + ";" + sorted[i].cond + ";" + stamp(sorted[i].ts) + "\n";
+    }
+    return out;
+  }
+
+  /* ---------------- eventi ---------------- */
+  $("startBtn").addEventListener("click", function(){
+    show("scan");
+    beep();
+    startCamera();
+  });
+  $("retryCam").addEventListener("click", startCamera);
+  $("introList").addEventListener("click", function(){ show("list"); });
+  $("scanList").addEventListener("click", function(){ scanning = false; show("list"); });
+  $("backScan").addEventListener("click", function(){
+    show("scan");
+    if(!stream && !zxReader) startCamera(); else resume();
+  });
+
+  function openManual(){ $("manualModal").hidden = false; $("manualInput").value = ""; $("manualInput").focus(); }
+  $("introManual").addEventListener("click", openManual);
+  $("scanManual").addEventListener("click", function(){ scanning = false; openManual(); });
+  $("manualCancel").addEventListener("click", function(){ $("manualModal").hidden = true; resume(); });
+  $("manualOk").addEventListener("click", function(){
+    var v = $("manualInput").value.replace(/\D/g, "");
+    if(v.length < 8){ toast("Codice troppo corto"); return; }
+    $("manualModal").hidden = true;
+    openSheet(v, true);
+  });
+  $("manualInput").addEventListener("keydown", function(e){ if(e.key === "Enter") $("manualOk").click(); });
+
+  var conds = document.querySelectorAll(".cond");
+  for(var i=0;i<conds.length;i++){
+    conds[i].addEventListener("click", function(){ assign(this.getAttribute("data-c")); });
+  }
+  $("sheetCancel").addEventListener("click", closeSheet);
+  $("sheetDelete").addEventListener("click", removeCurrent);
+
+  $("rows").addEventListener("click", function(e){
+    var row = e.target.closest ? e.target.closest(".row") : null;
+    if(row) openSheet(row.getAttribute("data-code"), true);
+  });
+
+  $("exportBtn").addEventListener("click", function(){
+    if(!books.length){ toast("Schedario vuoto"); return; }
+    $("csvArea").value = buildCsv();
+    $("exportModal").hidden = false;
+  });
+  $("exportClose").addEventListener("click", function(){ $("exportModal").hidden = true; });
+  $("csvCopy").addEventListener("click", function(){
+    var ta = $("csvArea");
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(ta.value).then(function(){ toast("Copiato"); }).catch(function(){ ta.select(); });
+    }else{ ta.select(); document.execCommand("copy"); toast("Copiato"); }
+  });
+  $("csvDownload").addEventListener("click", function(){
+    try{
+      var blob = new Blob(["\ufeff" + $("csvArea").value], {type:"text/csv;charset=utf-8"});
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "schedario-libri.csv";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    }catch(e){ toast("Download bloccato: usa Copia"); }
+  });
+
+  document.addEventListener("visibilitychange", function(){
+    if(document.hidden) scanning = false;
+    else if($("scanView").hidden === false && $("sheet").hidden) resume();
+  });
+
+  /* ---------------- avvio ---------------- */
+  load().then(function(){
+    renderTally();
+    show("intro");
+  });
+})();
+</script>
+</body>
+</html>
