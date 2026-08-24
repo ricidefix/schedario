@@ -616,6 +616,18 @@
     });
   }
 
+    // Messa a fuoco continua e leggero zoom, dove il dispositivo li supporta
+  function tuneTrack(){
+    try{
+      var t = stream && stream.getVideoTracks()[0];
+      if(!t || !t.getCapabilities) return;
+      var cap = t.getCapabilities(), adv = [];
+      if(cap.focusMode && cap.focusMode.indexOf("continuous") > -1) adv.push({focusMode:"continuous"});
+      if(cap.zoom && cap.zoom.max && cap.zoom.max >= 2) adv.push({zoom:2});
+      if(adv.length) t.applyConstraints({advanced:adv}).catch(function(){});
+    }catch(e){}
+  }
+  
   // Avvio del rilevatore: separato dalla fotocamera, così un suo errore
   // non viene scambiato per un permesso negato.
   function startDetection(){
@@ -642,8 +654,7 @@
       return;
     }
     var video = $("video");
-    var pref = {video:{facingMode:{ideal:"environment"}, width:{ideal:1280}, height:{ideal:720}}, audio:false};
-
+    var pref = {video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}, audio:false};
     navigator.mediaDevices.getUserMedia(pref).catch(function(e){
       var n = e && e.name;
       if(n === "OverconstrainedError" || n === "NotFoundError" || n === "NotReadableError"){
@@ -653,6 +664,7 @@
     }).then(function(s){
       stream = s;
       video.srcObject = s;
+      tuneTrack();
       var p = video.play();
       // play() può rifiutare per le regole di autoplay: non è un problema di permessi
       if(p && p.catch) p.catch(function(){});
@@ -670,6 +682,7 @@
     // se l'autoplay è stato bloccato, un tocco sull'inquadratura fa partire il video
     $("camwrap").addEventListener("click", function(){
       if(video.paused && video.srcObject){ var q = video.play(); if(q && q.catch) q.catch(function(){}); }
+      tuneTrack();
     });
   }
 
