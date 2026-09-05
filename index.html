@@ -37,7 +37,20 @@
   }
   .wordmark{
     font-size:12px; letter-spacing:.34em; text-transform:uppercase; font-weight:600;
+    display:flex; align-items:center; gap:7px; padding:0; max-width:62vw;
   }
+  .wordmark .nm{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .wordmark .caret{font-size:8px; opacity:.65; letter-spacing:0}
+  .setlist{max-height:42vh; overflow-y:auto; margin-bottom:12px}
+  .setrow{
+    display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+    padding:12px 0; border-bottom:1px solid var(--line);
+  }
+  .setrow .dot{width:7px; height:7px; border-radius:50%; flex:none; background:transparent}
+  .setrow.on .dot{background:var(--ottimo)}
+  .setrow .nm{flex:1; min-width:0; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .setrow.on .nm{font-weight:700}
+  .setrow .ct{font-family:var(--mono); font-size:11px; color:var(--muted)}
   .tally{font-family:var(--mono); font-size:12px; color:var(--muted); letter-spacing:.04em}
 
   /* ---------- schermata iniziale ---------- */
@@ -85,7 +98,7 @@
   }
   .camerror p{color:var(--muted); font-size:14px; line-height:1.5; margin:0; max-width:34ch}
 
-  /* ---------- cartellino ----------  */
+  /* ---------- cartellino ---------- */
   .slipzone{padding:12px 16px 0; min-height:74px}
   .slip{
     display:flex; align-items:center; gap:12px;
@@ -192,7 +205,7 @@
     animation:up .18s ease;
   }
   .toast[hidden]{display:none}
-    .camswitch{
+  .camswitch{
     position:absolute; top:10px; right:10px; z-index:3;
     background:rgba(12,26,33,.72); border:1px solid var(--line); color:var(--cream);
     font-size:10px; letter-spacing:.16em; text-transform:uppercase; font-weight:600;
@@ -200,14 +213,14 @@
   }
   .camswitch[hidden]{display:none}
   @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
-.camerror[hidden]{display:none}
+  .camerror[hidden]{display:none}
 </style>
 </head>
 <body>
 <div id="app">
 
   <div class="top">
-    <div class="wordmark">Schedario</div>
+    <button class="wordmark" id="setBtn"><span class="nm" id="setLabel">Schedario</span><span class="caret">▼</span></button>
     <div class="tally" id="tally">0 volumi</div>
   </div>
 
@@ -218,7 +231,7 @@
     <button class="btn primary wide" id="startBtn">Avvia scansione</button>
     <div class="bar" style="padding-left:0;padding-right:0;width:100%;max-width:420px">
       <button class="btn" id="introManual">Digita codice</button>
-      <button class="btn" id="introList">Schedario</button>
+      <button class="btn" id="introList">Elenco</button>
     </div>
   </section>
 
@@ -234,12 +247,12 @@
         <button class="btn" id="retryCam" style="flex:none;padding:14px 26px">Riprova</button>
       </div>
       <div class="diag" id="diag"></div>
-            <button class="camswitch" id="camswitch" hidden>Cambia camera</button>
+      <button class="camswitch" id="camswitch" hidden>Cambia camera</button>
     </div>
     <div class="slipzone" id="slipzone"></div>
     <div class="bar">
       <button class="btn" id="scanManual">Digita codice</button>
-      <button class="btn" id="scanList">Schedario</button>
+      <button class="btn" id="scanList">Elenco</button>
     </div>
   </section>
 
@@ -278,6 +291,23 @@
   </div>
 </div>
 
+<!-- schedari -->
+<div class="modal" id="setsModal" hidden>
+  <div class="card">
+    <h2>Schedari</h2>
+    <div class="setlist" id="setsList"></div>
+    <input class="notefield" type="text" id="setInput" placeholder="Nome dello schedario" autocomplete="off">
+    <div class="bar" style="padding:0">
+      <button class="btn" id="setRename">Rinomina</button>
+      <button class="btn primary" id="setNew">Crea</button>
+    </div>
+    <div class="bar" style="padding:8px 0 0">
+      <button class="btn" id="setsClose">Chiudi</button>
+      <button class="btn" id="setDelete">Elimina</button>
+    </div>
+  </div>
+</div>
+
 <!-- inserimento manuale -->
 <div class="modal" id="manualModal" hidden>
   <div class="card">
@@ -309,7 +339,9 @@
 (function(){
   "use strict";
 
-  var KEY = "libri:catalogo";
+  var KEY = "libri:schedari";
+  var OLDKEY = "libri:catalogo";
+  var DB = null;
   var COLORS = {Ottimo:"#17876B", Buono:"#7C9A3D", Accettabile:"#C4881B", Pessimo:"#B03A2A"};
   var ORDER = ["Ottimo","Buono","Accettabile","Pessimo"];
 
@@ -327,22 +359,47 @@
     try{ window.localStorage.setItem("__t","1"); window.localStorage.removeItem("__t"); return true; }
     catch(e){ return false; }
   }
+  function localGet(k){
+    if(!hasLocal()) return null;
+    try{ return window.localStorage.getItem(k); }catch(e){ return null; }
+  }
+  function rawGet(k){
+    if(hasStore()){
+      return window.storage.get(k)
+        .then(function(r){ return (r && r.value) ? r.value : localGet(k); })
+        .catch(function(){ return localGet(k); });
+    }
+    return Promise.resolve(localGet(k));
+  }
+  function parse(txt, fallback){
+    if(!txt) return fallback;
+    try{ return JSON.parse(txt); }catch(e){ return fallback; }
+  }
+
+  function findSet(id){
+    if(!DB) return null;
+    for(var i=0;i<DB.sets.length;i++) if(DB.sets[i].id === id) return DB.sets[i];
+    return null;
+  }
+  function activeSet(){ return findSet(DB.active) || DB.sets[0]; }
+  function newId(){ return "s" + Date.now().toString(36); }
 
   function load(){
-    if(hasStore()){
-      return window.storage.get(KEY).then(function(r){
-        books = r && r.value ? JSON.parse(r.value) : [];
-      }).catch(function(){ books = readLocal(); });
-    }
-    books = readLocal();
-    return Promise.resolve();
-  }
-  function readLocal(){
-    if(!hasLocal()) return [];
-    try{ return JSON.parse(window.localStorage.getItem(KEY) || "[]"); }catch(e){ return []; }
+    return rawGet(KEY).then(function(txt){
+      DB = parse(txt, null);
+      if(DB && DB.sets && DB.sets.length) return;
+      // primo avvio: recupero l'eventuale elenco della versione a schedario unico
+      return rawGet(OLDKEY).then(function(old){
+        DB = {active:"s0", sets:[{id:"s0", name:"Schedario", books:parse(old, [])}]};
+      });
+    }).then(function(){
+      if(!DB || !DB.sets || !DB.sets.length) DB = {active:"s0", sets:[{id:"s0", name:"Schedario", books:[]}]};
+      if(!findSet(DB.active)) DB.active = DB.sets[0].id;
+      books = activeSet().books;
+    });
   }
   function persist(){
-    var payload = JSON.stringify(books);
+    var payload = JSON.stringify(DB);
     if(hasLocal()){ try{ window.localStorage.setItem(KEY, payload); }catch(e){} }
     if(hasStore()){
       return window.storage.set(KEY, payload).catch(function(){
@@ -413,6 +470,81 @@
 
   function renderTally(){
     $("tally").textContent = books.length + (books.length === 1 ? " volume" : " volumi");
+    $("setLabel").textContent = activeSet().name;
+  }
+
+  /* ---------------- schedari ---------------- */
+  var delArmed = false;
+  function renderSets(){
+    var html = "";
+    for(var i=0;i<DB.sets.length;i++){
+      var st = DB.sets[i];
+      html +=
+        '<button class="setrow' + (st.id === DB.active ? " on" : "") + '" data-set="' + esc(st.id) + '">' +
+          '<span class="dot"></span>' +
+          '<span class="nm">' + esc(st.name) + '</span>' +
+          '<span class="ct">' + st.books.length + '</span>' +
+        '</button>';
+    }
+    $("setsList").innerHTML = html;
+    $("setInput").value = activeSet().name;
+    $("setDelete").textContent = "Elimina";
+    delArmed = false;
+  }
+  function openSets(){
+    scanning = false;
+    renderSets();
+    $("setsModal").hidden = false;
+  }
+  function closeSets(){
+    $("setInput").blur();
+    $("setsModal").hidden = true;
+    resume();
+  }
+  function useSet(id){
+    if(!findSet(id)) return;
+    DB.active = id;
+    books = activeSet().books;
+    persist();
+    renderTally();
+    renderSlip(null);
+    renderList();
+    toast(activeSet().name);
+    closeSets();
+  }
+  function createSet(){
+    var nm = $("setInput").value.trim();
+    if(!nm){ toast("Serve un nome"); return; }
+    var st = {id:newId(), name:nm, books:[]};
+    DB.sets.push(st);
+    useSet(st.id);
+  }
+  function renameSet(){
+    var nm = $("setInput").value.trim();
+    if(!nm){ toast("Serve un nome"); return; }
+    activeSet().name = nm;
+    persist();
+    renderTally();
+    renderSets();
+    toast("Rinominato");
+  }
+  function deleteSet(){
+    if(DB.sets.length < 2){ toast("Deve restarne almeno uno"); return; }
+    if(!delArmed){
+      delArmed = true;
+      $("setDelete").textContent = "Tocca di nuovo";
+      return;
+    }
+    var gone = DB.active;
+    DB.sets = DB.sets.filter(function(x){ return x.id !== gone; });
+    DB.active = DB.sets[0].id;
+    books = activeSet().books;
+    persist();
+    renderTally();
+    renderSlip(null);
+    renderList();
+    toast("Schedario eliminato");
+    renderSets();
   }
 
   function renderSlip(b){
@@ -447,7 +579,7 @@
 
     var rows = $("rows");
     if(!books.length){
-      rows.innerHTML = '<div class="empty">Nessun volume registrato.<br>Torna alla scansione e inquadra il primo codice.</div>';
+      rows.innerHTML = '<div class="empty">Nessun volume in questo schedario.<br>Torna alla scansione e inquadra il primo codice.</div>';
       return;
     }
     var sorted = books.slice().sort(function(a,b){ return b.ts - a.ts; });
@@ -478,7 +610,7 @@
     $("noteInput").value = (existing && existing.note) ? existing.note : "";
     $("sheetDelete").hidden = !existing;
     if(existing){
-      $("sheetEyebrow").textContent = "Già in schedario";
+      $("sheetEyebrow").textContent = "Già in " + activeSet().name;
       $("sheetSub").textContent = "Registrato come " + existing.cond.toLowerCase() + " il " + stamp(existing.ts) + ". Tocca per aggiornare.";
     }else{
       $("sheetEyebrow").textContent = code.indexOf("978") === 0 || code.indexOf("979") === 0 ? "Nuovo volume · ISBN" : "Nuovo volume";
@@ -510,7 +642,9 @@
   }
   function removeCurrent(){
     if(!pending) return;
-    books = books.filter(function(b){ return b.code !== pending.code; });
+    var st = activeSet();
+    st.books = st.books.filter(function(b){ return b.code !== pending.code; });
+    books = st.books;
     persist(); renderTally(); renderList();
     if($("slipzone").textContent.indexOf(pending.code) > -1) renderSlip(null);
     toast("Eliminato");
@@ -553,7 +687,7 @@
     setTimeout(loop, 200);
   }
 
-    function diagLine(){
+  function diagLine(){
     var v = $("video");
     var t = (stream && stream.getVideoTracks) ? stream.getVideoTracks()[0] : null;
     var st = (t && t.getSettings) ? t.getSettings() : {};
@@ -626,7 +760,7 @@
     });
   }
 
-    var camList = [], camIndex = -1;
+  var camList = [], camIndex = -1;
   function stopStream(){
     if(stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; }
   }
@@ -665,7 +799,8 @@
   $("camswitch").addEventListener("click", function(e){
     e.stopPropagation();
     switchCam();
-  });  
+  });
+
   // Messa a fuoco continua e leggero zoom, dove il dispositivo li supporta
   function tuneTrack(){
     try{
@@ -677,7 +812,7 @@
       if(adv.length) t.applyConstraints({advanced:adv}).catch(function(){});
     }catch(e){}
   }
-  
+
   // Avvio del rilevatore: separato dalla fotocamera, così un suo errore
   // non viene scambiato per un permesso negato.
   function startDetection(){
@@ -742,10 +877,10 @@
   /* ---------------- esportazione ---------------- */
   function buildCsv(){
     function q(t){ return '"' + String(t || "").replace(/"/g, '""').replace(/[\r\n]+/g, " ") + '"'; }
-    var out = "codice;stato;nota;data_ora\n";
+    var out = "schedario;codice;stato;nota;data_ora\n";
     var sorted = books.slice().sort(function(a,b){ return a.ts - b.ts; });
     for(var i=0;i<sorted.length;i++){
-      out += sorted[i].code + ";" + sorted[i].cond + ";" + q(sorted[i].note) + ";" + stamp(sorted[i].ts) + "\n";
+      out += q(activeSet().name) + ";" + sorted[i].code + ";" + sorted[i].cond + ";" + q(sorted[i].note) + ";" + stamp(sorted[i].ts) + "\n";
     }
     return out;
   }
@@ -780,6 +915,17 @@
   for(var i=0;i<conds.length;i++){
     conds[i].addEventListener("click", function(){ assign(this.getAttribute("data-c")); });
   }
+
+  $("setBtn").addEventListener("click", openSets);
+  $("setsClose").addEventListener("click", closeSets);
+  $("setNew").addEventListener("click", createSet);
+  $("setRename").addEventListener("click", renameSet);
+  $("setDelete").addEventListener("click", deleteSet);
+  $("setsList").addEventListener("click", function(e){
+    var r = e.target.closest ? e.target.closest(".setrow") : null;
+    if(r) useSet(r.getAttribute("data-set"));
+  });
+
   $("sheetCancel").addEventListener("click", closeSheet);
   $("sheetDelete").addEventListener("click", removeCurrent);
 
