@@ -112,7 +112,8 @@
     width:9px; height:9px; border-radius:50%; background:var(--ink); opacity:.22; flex:none; margin-left:6px;
   }
   .slip .txt{flex:1; min-width:0}
-  .slip .code{font-family:var(--mono); font-size:15px; letter-spacing:.02em; display:block}
+  .slip .code{font-family:var(--mono); font-size:15px; letter-spacing:.02em; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .slip .code.tit, .row .code.tit{font-family:var(--label); font-size:15px; font-weight:600; letter-spacing:0}
   .memo{
     display:block; font-size:11px; opacity:.62; margin-top:2px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -182,7 +183,7 @@
   }
   .row .tag{width:7px; height:30px; flex:none; border-radius:1px}
   .row .txt{flex:1; min-width:0}
-  .row .code{font-family:var(--mono); font-size:15px; display:block}
+  .row .code{font-family:var(--mono); font-size:15px; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .row .meta{text-align:right; line-height:1.35}
   .row .meta .s{font-size:10px; letter-spacing:.16em; text-transform:uppercase; font-weight:700}
   .row .meta .t{font-family:var(--mono); font-size:11px; color:var(--muted)}
@@ -266,6 +267,7 @@
     <div class="rows" id="rows"></div>
     <div class="bar">
       <button class="btn primary" id="backScan">Scansiona</button>
+      <button class="btn" id="fillBtn">Titoli</button>
       <button class="btn" id="exportBtn">Esporta</button>
     </div>
   </section>
@@ -277,6 +279,8 @@
     <div class="eyebrow" id="sheetEyebrow">Nuovo volume</div>
     <div class="bigcode" id="sheetCode">—</div>
     <p class="sub" id="sheetSub">Stato di conservazione</p>
+    <input class="notefield" type="text" id="titleInput" placeholder="Titolo" autocomplete="off">
+    <input class="notefield" type="text" id="authorInput" placeholder="Autore" autocomplete="off">
     <input class="notefield" type="text" id="noteInput" placeholder="Nota, facoltativa — es. copertina staccata" autocomplete="off">
     <div class="conds">
       <button class="cond c-ottimo" data-c="Ottimo">Ottimo<small>come nuovo</small></button>
@@ -348,7 +352,7 @@
   var books = [];
   var scanning = false, stream = null, detector = null, zxReader = null;
   var candidate = null, candidateHits = 0, cooldown = {code:null, until:0};
-  var pending = null;   // {code, editing:bool}
+  var pending = null;   // {code, editing:bool, year}
   var audio = null;
 
   var $ = function(id){ return document.getElementById(id); };
@@ -460,6 +464,79 @@
     if(navigator.vibrate) navigator.vibrate(28);
   }
 
+  /* ---------------- ricerca titolo e autore ---------------- */
+  function gbooks(code){
+    return fetch("https://www.googleapis.com/books/v1/volumes?q=isbn:" + encodeURIComponent(code))
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if(!j || !j.items || !j.items.length) return null;
+        var v = j.items[0].volumeInfo || {};
+        if(!v.title) return null;
+        return {
+          title: v.subtitle ? (v.title + ". " + v.subtitle) : v.title,
+          author: (v.authors || []).join(", "),
+          year: String(v.publishedDate || "").slice(0, 4),
+          src: "Google Books"
+        };
+      }).catch(function(){ return null; });
+  }
+  function openlib(code){
+    return fetch("https://openlibrary.org/api/books?bibkeys=ISBN:" + encodeURIComponent(code) + "&format=json&jscmd=data")
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        var k = j && j["ISBN:" + code];
+        if(!k || !k.title) return null;
+        var y = String(k.publish_date || "").match(/\d{4}/);
+        return {
+          title: k.subtitle ? (k.title + ". " + k.subtitle) : k.title,
+          author: (k.authors || []).map(function(a){ return a.name; }).join(", "),
+          year: y ? y[0] : "",
+          src: "Open Library"
+        };
+      }).catch(function(){ return null; });
+  }
+  function lookup(code){
+    if(!DB.cache) DB.cache = {};
+    if(DB.cache[code]) return Promise.resolve(DB.cache[code]);
+    if(typeof fetch !== "function") return Promise.resolve(null);
+    return gbooks(code).then(function(r){
+      return r ? r : openlib(code);
+    }).then(function(r){
+      if(r) DB.cache[code] = r;
+      return r;
+    });
+  }
+
+  // riempie i titoli mancanti dello schedario attivo, uno alla volta
+  var filling = false;
+  function fillMissing(){
+    if(filling) return;
+    var todo = books.filter(function(b){ return !b.title; });
+    if(!todo.length){ toast("Nessun titolo mancante"); return; }
+    filling = true;
+    var i = 0, done = 0;
+    $("fillBtn").textContent = "0/" + todo.length;
+    (function step(){
+      if(i >= todo.length){
+        filling = false;
+        $("fillBtn").textContent = "Titoli";
+        persist(); renderList();
+        toast(done + " di " + todo.length + " completati");
+        return;
+      }
+      var b = todo[i++];
+      lookup(b.code).then(function(r){
+        if(r && !b.title){
+          b.title = r.title; b.author = r.author; b.year = r.year;
+          done++;
+        }
+        $("fillBtn").textContent = i + "/" + todo.length;
+        if(i % 5 === 0){ persist(); renderList(); }
+        setTimeout(step, 350);
+      });
+    })();
+  }
+
   /* ---------------- viste ---------------- */
   function show(which){
     $("introView").hidden = which !== "intro";
@@ -547,6 +624,14 @@
     renderSets();
   }
 
+  function subLine(b){
+    var bits = [];
+    if(b.title) bits.push(b.code);
+    if(b.author) bits.push(b.author);
+    if(b.note) bits.push(b.note);
+    return bits.join(" · ");
+  }
+
   function renderSlip(b){
     var z = $("slipzone");
     if(!b){ z.innerHTML = ""; return; }
@@ -555,8 +640,8 @@
         '<span class="tab" style="background:'+COLORS[b.cond]+'"></span>' +
         '<span class="hole"></span>' +
         '<span class="txt">' +
-          '<span class="code">'+esc(b.code)+'</span>' +
-          (b.note ? '<span class="memo">'+esc(b.note)+'</span>' : '') +
+          '<span class="code'+(b.title ? " tit" : "")+'">'+esc(b.title || b.code)+'</span>' +
+          '<span class="memo">'+esc(subLine(b))+'</span>' +
         '</span>' +
         '<span class="state" style="color:'+COLORS[b.cond]+'">'+b.cond+'</span>' +
         '<span class="time">'+hhmm(b.ts)+'</span>' +
@@ -590,8 +675,8 @@
         '<button class="row" data-code="'+esc(b.code)+'">' +
           '<span class="tag" style="background:'+COLORS[b.cond]+'"></span>' +
           '<span class="txt">' +
-            '<span class="code">'+esc(b.code)+'</span>' +
-            (b.note ? '<span class="memo">'+esc(b.note)+'</span>' : '') +
+            '<span class="code'+(b.title ? " tit" : "")+'">'+esc(b.title || b.code)+'</span>' +
+            '<span class="memo">'+esc(subLine(b))+'</span>' +
           '</span>' +
           '<span class="meta">' +
             '<span class="s" style="color:'+COLORS[b.cond]+'">'+b.cond+'</span><br>' +
@@ -604,22 +689,40 @@
 
   /* ---------------- pannello stato ---------------- */
   function openSheet(code, editing){
-    pending = {code:code, editing:!!editing};
+    pending = {code:code, editing:!!editing, year:""};
     var existing = find(code);
     $("sheetCode").textContent = code;
-    $("noteInput").value = (existing && existing.note) ? existing.note : "";
+    $("titleInput").value  = (existing && existing.title)  ? existing.title  : "";
+    $("authorInput").value = (existing && existing.author) ? existing.author : "";
+    $("noteInput").value   = (existing && existing.note)   ? existing.note   : "";
+    if(existing && existing.year) pending.year = existing.year;
     $("sheetDelete").hidden = !existing;
     if(existing){
       $("sheetEyebrow").textContent = "Già in " + activeSet().name;
-      $("sheetSub").textContent = "Registrato come " + existing.cond.toLowerCase() + " il " + stamp(existing.ts) + ". Tocca per aggiornare.";
+      $("sheetSub").textContent = "Registrato come " + existing.cond.toLowerCase() + " il " + stamp(existing.ts) + ". Tocca uno stato per aggiornare.";
     }else{
       $("sheetEyebrow").textContent = code.indexOf("978") === 0 || code.indexOf("979") === 0 ? "Nuovo volume · ISBN" : "Nuovo volume";
       $("sheetSub").textContent = "Stato di conservazione";
     }
     $("sheet").hidden = false;
+
+    // ricerca automatica solo se non ho già un titolo
+    if(!$("titleInput").value){
+      $("sheetSub").textContent = "Cerco titolo e autore…";
+      lookup(code).then(function(r){
+        if(!pending || pending.code !== code) return;      // pannello già chiuso o cambiato
+        if(!r){ $("sheetSub").textContent = "Titolo non trovato: puoi scriverlo a mano."; return; }
+        if(!$("titleInput").value)  $("titleInput").value  = r.title;
+        if(!$("authorInput").value) $("authorInput").value = r.author;
+        pending.year = r.year || "";
+        $("sheetSub").textContent = "Trovato su " + r.src + " — correggi pure se è sbagliato.";
+      }).catch(function(){
+        $("sheetSub").textContent = "Ricerca non riuscita: scrivi a mano o completa dopo.";
+      });
+    }
   }
   function closeSheet(){
-    $("noteInput").blur();
+    $("titleInput").blur(); $("authorInput").blur(); $("noteInput").blur();
     $("sheet").hidden = true;
     pending = null;
     $("camwrap").classList.remove("locked");
@@ -630,8 +733,16 @@
     if(!pending) return;
     var code = pending.code, existing = find(code);
     var note = $("noteInput").value.trim();
-    if(existing){ existing.cond = cond; existing.note = note; existing.ts = Date.now(); }
-    else { books.push({code:code, cond:cond, note:note, ts:Date.now()}); }
+    var title = $("titleInput").value.trim();
+    var author = $("authorInput").value.trim();
+    var year = pending.year || "";
+    if(existing){
+      existing.cond = cond; existing.note = note;
+      existing.title = title; existing.author = author; existing.year = year;
+      existing.ts = Date.now();
+    }else{
+      books.push({code:code, cond:cond, note:note, title:title, author:author, year:year, ts:Date.now()});
+    }
     persist();
     renderTally();
     renderSlip(find(code));
@@ -877,10 +988,10 @@
   /* ---------------- esportazione ---------------- */
   function buildCsv(){
     function q(t){ return '"' + String(t || "").replace(/"/g, '""').replace(/[\r\n]+/g, " ") + '"'; }
-    var out = "schedario;codice;stato;nota;data_ora\n";
+    var out = "schedario;codice;titolo;autore;anno;stato;nota;data_ora\n";
     var sorted = books.slice().sort(function(a,b){ return a.ts - b.ts; });
     for(var i=0;i<sorted.length;i++){
-      out += q(activeSet().name) + ";" + sorted[i].code + ";" + sorted[i].cond + ";" + q(sorted[i].note) + ";" + stamp(sorted[i].ts) + "\n";
+      out += q(activeSet().name) + ";" + sorted[i].code + ";" + q(sorted[i].title) + ";" + q(sorted[i].author) + ";" + (sorted[i].year || "") + ";" + sorted[i].cond + ";" + q(sorted[i].note) + ";" + stamp(sorted[i].ts) + "\n";
     }
     return out;
   }
@@ -934,6 +1045,7 @@
     if(row) openSheet(row.getAttribute("data-code"), true);
   });
 
+  $("fillBtn").addEventListener("click", fillMissing);
   $("exportBtn").addEventListener("click", function(){
     if(!books.length){ toast("Schedario vuoto"); return; }
     $("csvArea").value = buildCsv();
