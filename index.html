@@ -324,16 +324,21 @@
   </div>
 </div>
 
-<!-- esportazione -->
+<!-- esportazione e importazione -->
 <div class="modal" id="exportModal" hidden>
   <div class="card">
-    <h2>Esporta in CSV</h2>
-    <textarea id="csvArea" readonly></textarea>
+    <h2>CSV</h2>
+    <textarea id="csvArea" placeholder="Incolla qui il CSV da importare, oppure aprilo da file."></textarea>
     <div class="bar" style="padding:14px 0 0">
       <button class="btn" id="exportClose">Chiudi</button>
       <button class="btn" id="csvDownload">Scarica</button>
-      <button class="btn primary" id="csvCopy">Copia</button>
+      <button class="btn" id="csvCopy">Copia</button>
     </div>
+    <div class="bar" style="padding:8px 0 0">
+      <button class="btn" id="csvFile">Da file</button>
+      <button class="btn primary" id="csvImport">Importa</button>
+    </div>
+    <input type="file" id="csvPicker" accept=".csv,.txt,text/csv,text/plain" style="display:none">
   </div>
 </div>
 
@@ -465,22 +470,40 @@
   }
 
   /* ---------------- ricerca titolo e autore ---------------- */
-  function gbooks(code){
-    return fetch("https://www.googleapis.com/books/v1/volumes?q=isbn:" + encodeURIComponent(code))
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(j){
-        if(!j || !j.items || !j.items.length) return null;
-        var v = j.items[0].volumeInfo || {};
-        if(!v.title) return null;
-        return {
-          title: v.subtitle ? (v.title + ". " + v.subtitle) : v.title,
-          author: (v.authors || []).join(", "),
-          year: String(v.publishedDate || "").slice(0, 4),
-          src: "Google Books"
-        };
-      }).catch(function(){ return null; });
+    // dall'ISBN-13 (978…) ricavo l'ISBN-10: Google non indicizza sempre entrambe le forme
+  function isbn10(c){
+    if(!/^978\d{10}$/.test(c)) return null;
+    var core = c.slice(3, 12), s = 0;
+    for(var i = 0; i < 9; i++) s += (+core[i]) * (10 - i);
+    var r = 11 - (s % 11);
+    return core + (r === 10 ? "X" : (r === 11 ? "0" : String(r)));
   }
-  function openlib(code){
+  function pickGB(j){
+    if(!j || !j.items || !j.items.length) return null;
+    var v = j.items[0].volumeInfo || {};
+    if(!v.title) return null;
+    return {
+      title: v.subtitle ? (v.title + ". " + v.subtitle) : v.title,
+      author: (v.authors || []).join(", "),
+      year: String(v.publishedDate || "").slice(0, 4),
+      src: "Google Books"
+    };
+  }
+  function gbQuery(q){
+    // country=IT: senza questo parametro Google può rispondere vuoto per restrizioni geografiche
+    return fetch("https://www.googleapis.com/books/v1/volumes?country=IT&q=" + encodeURIComponent(q))
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(pickGB)
+      .catch(function(){ return null; });
+  }
+  function gbooks(code){
+    var alt = isbn10(code);
+    return gbQuery("isbn:" + code)
+      .then(function(r){ return r ? r : (alt ? gbQuery("isbn:" + alt) : null); })
+      .then(function(r){ return r ? r : gbQuery(code); });   // ricerca libera
+  }
+
+  function olData(code){
     return fetch("https://openlibrary.org/api/books?bibkeys=ISBN:" + encodeURIComponent(code) + "&format=json&jscmd=data")
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){
@@ -495,6 +518,27 @@
         };
       }).catch(function(){ return null; });
   }
+  function olSearch(code){
+    return fetch("https://openlibrary.org/search.json?isbn=" + encodeURIComponent(code) + "&limit=1")
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        var d = j && j.docs && j.docs[0];
+        if(!d || !d.title) return null;
+        return {
+          title: d.title,
+          author: (d.author_name || []).join(", "),
+          year: d.first_publish_year ? String(d.first_publish_year) : "",
+          src: "Open Library"
+        };
+      }).catch(function(){ return null; });
+  }
+  function openlib(code){
+    var alt = isbn10(code);
+    return olData(code)
+      .then(function(r){ return r ? r : (alt ? olData(alt) : null); })
+      .then(function(r){ return r ? r : olSearch(code); });
+  }
+
   function lookup(code){
     if(!DB.cache) DB.cache = {};
     if(DB.cache[code]) return Promise.resolve(DB.cache[code]);
@@ -506,7 +550,6 @@
       return r;
     });
   }
-
   // riempie i titoli mancanti dello schedario attivo, uno alla volta
   var filling = false;
   function fillMissing(){
@@ -995,7 +1038,74 @@
     }
     return out;
   }
+  /* ---------------- importazione ---------------- */
+  function parseCsv(text){
+    text = String(text).replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    var primaRiga = text.split("\n")[0] || "";
+    var sep = (primaRiga.split(";").length >= primaRiga.split(",").length) ? ";" : ",";
+    var rows = [], row = [], cur = "", quoted = false;
+    for(var i = 0; i < text.length; i++){
+      var ch = text[i];
+      if(quoted){
+        if(ch === '"'){
+          if(text[i+1] === '"'){ cur += '"'; i++; }
+          else quoted = false;
+        } else cur += ch;
+      }else{
+        if(ch === '"') quoted = true;
+        else if(ch === sep){ row.push(cur); cur = ""; }
+        else if(ch === "\n"){ row.push(cur); rows.push(row); row = []; cur = ""; }
+        else cur += ch;
+      }
+    }
+    if(cur !== "" || row.length){ row.push(cur); rows.push(row); }
+    return rows;
+  }
 
+  function importCsv(text){
+    var rows = parseCsv(text);
+    if(rows.length < 2){ toast("Nessuna riga da importare"); return; }
+    var head = rows[0].map(function(h){ return h.trim().toLowerCase(); });
+    var iCode = head.indexOf("codice"),
+        iTit  = head.indexOf("titolo"),
+        iAut  = head.indexOf("autore"),
+        iAnno = head.indexOf("anno"),
+        iSta  = head.indexOf("stato"),
+        iNota = head.indexOf("nota");
+    if(iCode < 0){ toast("Manca la colonna codice"); return; }
+
+    var upd = 0, add = 0;
+    for(var r = 1; r < rows.length; r++){
+      var f = rows[r];
+      if(!f || f.length < 2) continue;
+      var code = String(f[iCode] || "").replace(/[^0-9Xx]/g, "").toUpperCase();
+      if(code.length < 8) continue;
+      var tit  = iTit  >= 0 ? String(f[iTit]  || "").trim() : "";
+      var aut  = iAut  >= 0 ? String(f[iAut]  || "").trim() : "";
+      var anno = iAnno >= 0 ? String(f[iAnno] || "").trim() : "";
+      var b = find(code);
+      if(b){
+        var mod = false;
+        // riempio solo i vuoti: le correzioni fatte a mano non si toccano
+        if(tit  && !b.title ){ b.title  = tit;  mod = true; }
+        if(aut  && !b.author){ b.author = aut;  mod = true; }
+        if(anno && !b.year  ){ b.year   = anno; mod = true; }
+        if(mod) upd++;
+      }else{
+        var sta = iSta >= 0 ? String(f[iSta] || "").trim() : "";
+        sta = sta.charAt(0).toUpperCase() + sta.slice(1).toLowerCase();
+        if(ORDER.indexOf(sta) < 0) sta = "Buono";
+        books.push({
+          code: code, cond: sta,
+          note: iNota >= 0 ? String(f[iNota] || "").trim() : "",
+          title: tit, author: aut, year: anno, ts: Date.now()
+        });
+        add++;
+      }
+    }
+    persist(); renderTally(); renderList();
+    toast(upd + " aggiornati · " + add + " aggiunti");
+  }
   /* ---------------- eventi ---------------- */
   $("startBtn").addEventListener("click", function(){
     show("scan");
@@ -1047,8 +1157,7 @@
 
   $("fillBtn").addEventListener("click", fillMissing);
   $("exportBtn").addEventListener("click", function(){
-    if(!books.length){ toast("Schedario vuoto"); return; }
-    $("csvArea").value = buildCsv();
+    $("csvArea").value = books.length ? buildCsv() : "";
     $("exportModal").hidden = false;
   });
   $("exportClose").addEventListener("click", function(){ $("exportModal").hidden = true; });
@@ -1057,6 +1166,21 @@
     if(navigator.clipboard){
       navigator.clipboard.writeText(ta.value).then(function(){ toast("Copiato"); }).catch(function(){ ta.select(); });
     }else{ ta.select(); document.execCommand("copy"); toast("Copiato"); }
+  });
+    $("csvFile").addEventListener("click", function(){ $("csvPicker").click(); });
+  $("csvPicker").addEventListener("change", function(e){
+    var f = e.target.files && e.target.files[0];
+    if(!f) return;
+    var fr = new FileReader();
+    fr.onload = function(){ $("csvArea").value = fr.result; toast("File caricato"); };
+    fr.onerror = function(){ toast("Lettura non riuscita"); };
+    fr.readAsText(f);
+    e.target.value = "";
+  });
+  $("csvImport").addEventListener("click", function(){
+    var t = $("csvArea").value.trim();
+    if(!t){ toast("Prima incolla o apri un CSV"); return; }
+    importCsv(t);
   });
   $("csvDownload").addEventListener("click", function(){
     try{
